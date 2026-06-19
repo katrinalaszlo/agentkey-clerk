@@ -21,6 +21,20 @@ agentkey-clerk adds that layer. The customer keeps using their Clerk-issued key.
 
 Built on [`@katrinalaszlo/agentkey`](https://github.com/katrinalaszlo/agentkey).
 
+## Which one do I use?
+
+Pick the row that matches **who is calling your API**. Most people want the first row.
+
+| If the caller is… | They authenticate with… | Use this middleware | Track spend with |
+|---|---|---|---|
+| **Your customer** (you gave them a key) | a Clerk **API key** — `Bearer ak_…`, subject is `user_…` or `org_…` | `clerkApiKeyMiddleware` | `trackByApiKey` |
+| **Your own backend service** (microservice, worker, cron) | a Clerk **M2M token** | `clerkAgentKeyMiddleware` | `trackByM2M` |
+| **An app that doesn't use Clerk** | agentkey's own `ak_` key | — use [`@katrinalaszlo/agentkey`](https://github.com/katrinalaszlo/agentkey) directly | — |
+
+Rule of thumb: **customer spend caps → row 1.** Capping your *own* services is row 2. The rest of this README is about row 1; row 2 is covered in [Internal services](#also-internal-services-clerk-m2m).
+
+User keys vs Org keys (row 1) are the same to agentkey — it caps whatever the key's subject is (`user_…` or `org_…`). You choose which to allow when you enable the feature (see Install).
+
 ## Install
 
 ```bash
@@ -28,6 +42,8 @@ npm install @katrinalaszlo/agentkey-clerk @katrinalaszlo/agentkey
 ```
 
 You bring your own Clerk client (`@clerk/backend` or `@clerk/express`) and a Postgres pool — this package doesn't wrap either.
+
+**Enable API Keys in Clerk first.** It's off by default. In the Clerk Dashboard go to **Configure → API keys → Enable API keys**, then turn on **User API keys** and/or **Organization API keys** depending on whether your customers hold keys as users (`user_…` subject) or orgs (`org_…` subject) — agentkey-clerk caps either. Until this is on, `clerkClient.apiKeys.verify` / `.create` return `403 feature_not_enabled`.
 
 ## Quick start
 
