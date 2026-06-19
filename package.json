@@ -36,9 +36,11 @@
   },
   "devDependencies": {
     "@katrinalaszlo/agentkey": "file:../agentkey",
-    "typescript": "^5.0.0",
-    "vitest": "^3.0.0",
+    "@types/express": "^4.0.0",
+    "@types/pg": "^8.20.0",
     "express": "^4.0.0",
-    "@types/express": "^4.0.0"
+    "pg": "^8.22.0",
+    "typescript": "^5.0.0",
+    "vitest": "^3.0.0"
   }
 }
