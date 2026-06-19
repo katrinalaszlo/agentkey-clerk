@@ -44,6 +44,7 @@ declare global {
   namespace Express {
     interface Request {
       m2m?: VerifiedM2MToken;
+      clerkApiKey?: VerifiedApiKey;
       agentKey?: ValidateResult;
     }
   }
@@ -112,6 +113,126 @@ export function clerkAgentKeyMiddleware(opts: ClerkAgentKeyOptions) {
 // Charge a machine's budget after its billable work (e.g. after an LLM call).
 // Thin wrapper over agentkey's subject-keyed usage tracking.
 export function trackByM2M(
+  ak: AgentKey,
+  subject: string,
+  costCents: number,
+) {
+  return ak.trackUsageBySubject(subject, { costCents });
+}
+
+// ---------------------------------------------------------------------------
+// Clerk API Keys (the customer-facing case)
+//
+// Clerk API Keys are the keys your *users* create to call your API on their
+// behalf (distinct from M2M tokens, which are for your own backend services).
+// This is the case where per-customer spend caps actually matter: cap what each
+// customer's key can spend against your paid API.
+// See https://clerk.com/docs/guides/development/machine-auth/api-keys
+// ---------------------------------------------------------------------------
+
+// Minimal shape of a verified Clerk API key (the result of
+// `clerkClient.apiKeys.verify(secret)`). Structural, so no hard @clerk/backend dep.
+export interface VerifiedApiKey {
+  id: string;
+  name?: string;
+  description?: string | null;
+  // The user (`user_xxx`) or organization (`org_xxx`) that owns the key — i.e.
+  // the customer. This is what the budget is keyed on.
+  subject: string;
+  scopes?: string[];
+  claims?: Record<string, unknown> | null;
+  revoked?: boolean;
+  expired?: boolean;
+  expiration?: number | null;
+}
+
+export interface ClerkApiKeyClient {
+  apiKeys: { verify(secret: string): Promise<VerifiedApiKey> };
+}
+
+export interface ClerkApiKeyOptions {
+  clerkClient: ClerkApiKeyClient;
+  ak: AgentKey;
+  // Scope/budget/expiry applied the first time a customer's key is seen.
+  defaults?: EnsureSubjectOptions;
+  // Per-customer override computed from the verified key. Takes precedence over
+  // `defaults` (e.g. read a plan tier from `apiKey.claims`).
+  onFirstSeen?: (apiKey: VerifiedApiKey) => EnsureSubjectOptions;
+  // Optional agentkey capability scope the route requires.
+  scope?: string;
+}
+
+// Express middleware: verify the incoming Clerk API key, then enforce agentkey's
+// budget/scope/expiry on the customer behind it. The customer keeps using their
+// Clerk-issued key; agentkey caps what that key can spend.
+export function clerkApiKeyMiddleware(opts: ClerkApiKeyOptions) {
+  const { clerkClient, ak, defaults, onFirstSeen, scope } = opts;
+
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith("Bearer ")) {
+      return res.status(401).json({ error: "Missing API key" });
+    }
+    const secret = authHeader.slice(7);
+
+    let verified: VerifiedApiKey;
+    try {
+      // Clerk's verify throws on an invalid, revoked, or expired key. Treat any
+      // verify failure as a denied key (401). Failing closed is the safe default
+      // even if the cause was a transient Clerk fault — access is denied, not
+      // granted. (Same posture as the M2M middleware's 401 on a bad token.)
+      verified = await clerkClient.apiKeys.verify(secret);
+    } catch {
+      return res.status(401).json({ error: "invalid_key" });
+    }
+
+    // Defensive: the SDK throws on these, but honor the flags if a future verify
+    // path returns them instead.
+    if (verified.revoked || verified.expired) {
+      return res.status(401).json({ error: "invalid_key" });
+    }
+
+    try {
+      const subject = verified.subject;
+      let result = await ak.validateBySubject(subject);
+
+      // First time we've seen this customer's key: provision its budget row,
+      // then re-validate. ensureSubject is idempotent, so concurrent first
+      // requests are safe.
+      if (!result.valid && result.reason === "invalid") {
+        await ak.ensureSubject(subject, onFirstSeen?.(verified) ?? defaults ?? {});
+        result = await ak.validateBySubject(subject);
+      }
+
+      if (!result.valid) {
+        const status = result.reason === "budget_exceeded" ? 429 : 401;
+        return res.status(status).json({ error: result.reason });
+      }
+
+      if (scope && !ak.hasScope(result, scope)) {
+        return res.status(403).json({
+          error: "insufficient_scope",
+          required: scope,
+          available: result.scopes,
+        });
+      }
+
+      req.clerkApiKey = verified;
+      req.agentKey = result;
+      next();
+    } catch (err) {
+      // agentkey DB lookups reject on routine faults (pool exhaustion, timeout).
+      // Express 4 doesn't forward a rejected async-middleware promise, so fail
+      // closed with a 500.
+      console.error("clerkApiKeyMiddleware error:", err);
+      return res.status(500).json({ error: "auth_unavailable" });
+    }
+  };
+}
+
+// Charge a customer's budget after their billable work. Pass the verified key's
+// subject (req.clerkApiKey.subject).
+export function trackByApiKey(
   ak: AgentKey,
   subject: string,
   costCents: number,

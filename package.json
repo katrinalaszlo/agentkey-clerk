@@ -1,7 +1,7 @@
 {
   "name": "@katrinalaszlo/agentkey-clerk",
-  "version": "0.1.0",
-  "description": "Spend caps for Clerk M2M tokens — budget, scope, and expiry on top of Clerk machine auth",
+  "version": "0.2.0",
+  "description": "Dollar spend caps for the Clerk API keys your users create: per-customer budget, scope, and expiry (also supports Clerk M2M)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [

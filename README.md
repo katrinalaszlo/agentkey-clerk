@@ -1,18 +1,20 @@
 # agentkey-clerk
 
-Spend caps for [Clerk](https://clerk.com) M2M tokens. Clerk authenticates your agent; agentkey-clerk caps what it can spend, scopes what it can do, and sets when its access ends.
+Spend caps for the [Clerk](https://clerk.com) API keys your users create. Your customers make API keys with Clerk; agentkey-clerk caps what each one can spend, scopes what it can do, and sets when its access ends.
 
 ## Why
 
-Clerk's [machine-to-machine (M2M) tokens](https://clerk.com/docs/guides/development/machine-auth/m2m-tokens) authenticate your agents: which machine is calling, and which machines it may talk to. What they don't do is cap how much a machine can spend, meter its usage, or scope what it can do. So once your agent has a valid M2M token, nothing stops it from burning through a month of budget in twenty minutes.
+When you give your customers [API keys](https://clerk.com/docs/guides/development/machine-auth/api-keys) through Clerk, each key calls your API on that customer's behalf. Clerk issues, verifies, and revokes the key. What it doesn't do is cap how much a customer's key can spend against your paid API, so one customer's runaway script can burn through usage that affects everyone else.
 
-This package adds that layer. The agent keeps carrying its Clerk M2M token. You add one middleware, and every request is checked against a per-machine budget, scope, and expiry before it runs.
+agentkey-clerk adds that layer. The customer keeps using their Clerk-issued key. You add one middleware, and every request is checked against a per-customer budget, scope, and expiry before it runs. It caps **dollars** (not just request counts) and blocks the call the moment a key crosses its budget.
+
+> agentkey-clerk is an independent, open-source companion to Clerk. It is not affiliated with Clerk.
 
 | Layer | What it controls | Who covers it |
 |---|---|---|
-| Identity | Which machine is calling | **Clerk M2M** |
-| Budget | How much this machine can spend | **agentkey** |
-| Scope | What this machine can do | **agentkey** |
+| Identity | Which customer's key is calling | **Clerk API Keys** |
+| Budget | How much this key can spend (in dollars) | **agentkey** |
+| Scope | What this key can do | **agentkey** |
 | Expiry | When access ends | **agentkey** |
 
 Built on [`@katrinalaszlo/agentkey`](https://github.com/katrinalaszlo/agentkey).
@@ -32,7 +34,7 @@ import express from "express";
 import pg from "pg";
 import { createClerkClient } from "@clerk/backend";
 import { AgentKey } from "@katrinalaszlo/agentkey";
-import { clerkAgentKeyMiddleware, trackByM2M } from "@katrinalaszlo/agentkey-clerk";
+import { clerkApiKeyMiddleware, trackByApiKey } from "@katrinalaszlo/agentkey-clerk";
 
 const pool = new pg.Pool();
 const ak = new AgentKey({ pool });
@@ -43,69 +45,72 @@ const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY 
 const app = express();
 
 app.use(
-  "/api/agent",
-  clerkAgentKeyMiddleware({
+  "/api",
+  clerkApiKeyMiddleware({
     clerkClient,
     ak,
-    // Applied the first time each machine is seen.
-    defaults: { scopes: ["proxy.chat"], budgetCents: 5000, budgetPeriod: "month" },
-    scope: "proxy.chat", // optional: required capability for this route
+    // Applied the first time each customer's key is seen.
+    defaults: { budgetCents: 5000, budgetPeriod: "month" },
   }),
 );
 
-// Inside a handler, after the agent's billable work:
-app.post("/api/agent/chat", async (req, res) => {
+// Inside a handler, after the customer's billable work:
+app.post("/api/chat", async (req, res) => {
   const cost = await callTheModel(req.body);
-  await trackByM2M(ak, req.m2m!.subject, cost.cents);
+  await trackByApiKey(ak, req.clerkApiKey!.subject, cost.cents);
   res.json(cost.result);
 });
 ```
 
-The agent calls your API with its Clerk M2M token in `Authorization: Bearer <token>`. The middleware:
+The customer calls your API with their Clerk API key in `Authorization: Bearer <key>`. The middleware:
 
-1. verifies the token with Clerk (`clerkClient.m2m.verify`),
-2. provisions a budget row for the machine on first sight (from `onFirstSeen` or `defaults`),
+1. verifies the key with Clerk (`clerkClient.apiKeys.verify`),
+2. provisions a budget row for the customer — the key's `subject`, a `user_` or `org_` id — on first sight,
 3. enforces budget, scope, and expiry,
-4. attaches `req.m2m` (the verified token) and `req.agentKey` (the budget state).
+4. attaches `req.clerkApiKey` (the verified key) and `req.agentKey` (the budget state).
 
 ## Responses
 
 | Condition | Status |
 |---|---|
 | Valid, in budget, has scope | `next()` |
-| Missing `Bearer` token | `401 Missing M2M token` |
-| Revoked or expired Clerk token | `401 invalid_token` |
+| Missing `Bearer` key | `401 Missing API key` |
+| Invalid / revoked / expired key | `401 invalid_key` |
 | Over budget | `429 budget_exceeded` |
 | Missing required scope | `403 insufficient_scope` |
-| Clerk or DB fault | `500 auth_unavailable` (fails closed) |
+| DB fault | `500 auth_unavailable` (fails closed) |
 
-## Per-machine budgets
+## Per-customer budgets
 
-Pass `onFirstSeen` to set budget/scope from the verified token instead of a flat default:
+Pass `onFirstSeen` to set budget/scope from the verified key — for example, read a plan tier off the key's `claims`:
 
 ```typescript
-clerkAgentKeyMiddleware({
+clerkApiKeyMiddleware({
   clerkClient,
   ak,
-  onFirstSeen: (token) => ({
-    accountId: (token.claims?.org_id as string) ?? token.subject,
+  onFirstSeen: (apiKey) => ({
+    accountId: apiKey.subject, // user_xxx or org_xxx
     scopes: ["proxy.chat"],
-    budgetCents: 2000,
-    budgetPeriod: "day",
+    budgetCents: apiKey.claims?.tier === "pro" ? 20000 : 2000,
+    budgetPeriod: "month",
     expiresIn: "30d",
   }),
 });
 ```
 
-`accountId` defaults to the machine subject if you don't set it.
+`accountId` defaults to the key's `subject` if you don't set it.
 
 ## A note on scope
 
-agentkey's `scopes` (what the agent may *do* — `proxy.chat`, `usage.read`) are not the same as Clerk's machine scopes (which machines may *talk to* which). This package enforces the agentkey kind. Set them in `defaults`/`onFirstSeen`.
+agentkey's `scopes` (what a key may *do* — `proxy.chat`, `usage.read`) are enforced by this package against the budget row. They're separate from Clerk's own API-key scopes. Set them in `defaults`/`onFirstSeen`.
+
+## Also: internal services (Clerk M2M)
+
+If you also want to cap your *own* backend services (microservices, workers) that authenticate with [Clerk M2M tokens](https://clerk.com/docs/guides/development/machine-auth/m2m-tokens) — which are distinct from customer API keys — use `clerkAgentKeyMiddleware` + `trackByM2M`. Same shape, keyed on the M2M machine subject. That's internal cost control rather than customer spend caps.
 
 ## What it doesn't do
 
-This is the per-machine spend layer only. It does not do hierarchical org > team > agent budget composition, and it does not put a human's Clerk session on the agent's request path (the agent carries its own M2M token — that's the point). For non-Clerk apps, use [`@katrinalaszlo/agentkey`](https://github.com/katrinalaszlo/agentkey) directly with its own `ak_` keys.
+Per-key dollar spend caps only. No hierarchical org > team > key budget composition. For non-Clerk apps, use [`@katrinalaszlo/agentkey`](https://github.com/katrinalaszlo/agentkey) directly with its own `ak_` keys.
 
 ## License
 
