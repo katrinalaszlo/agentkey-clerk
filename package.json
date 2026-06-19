@@ -1,0 +1,44 @@
+{
+  "name": "@katrinalaszlo/agentkey-clerk",
+  "version": "0.1.0",
+  "description": "Spend caps for Clerk M2M tokens — budget, scope, and expiry on top of Clerk machine auth",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "clerk",
+    "m2m",
+    "machine-to-machine",
+    "agent",
+    "budget",
+    "spend",
+    "scoped-keys",
+    "api-key",
+    "agentkey",
+    "agent-experience"
+  ],
+  "author": "Katrina Laszlo <katrina.j.laszlo@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/katrinalaszlo/agentkey-clerk.git"
+  },
+  "peerDependencies": {
+    "@katrinalaszlo/agentkey": ">=0.2.0",
+    "express": ">=4.0.0"
+  },
+  "devDependencies": {
+    "@katrinalaszlo/agentkey": "file:../agentkey",
+    "typescript": "^5.0.0",
+    "vitest": "^3.0.0",
+    "express": "^4.0.0",
+    "@types/express": "^4.0.0"
+  }
+}
