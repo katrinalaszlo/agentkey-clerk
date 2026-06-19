@@ -2,6 +2,8 @@
 
 Spend caps for the [Clerk](https://clerk.com) API keys your users create. Your customers make API keys with Clerk; agentkey-clerk caps what each one can spend, scopes what it can do, and sets when its access ends.
 
+![agentkey-clerk capping a customer's spend: a 30c/day cap at 10c per call, where the 4th request is blocked with a 429](assets/demo.gif)
+
 ## Why
 
 When you give your customers [API keys](https://clerk.com/docs/guides/development/machine-auth/api-keys) through Clerk, each key calls your API on that customer's behalf. Clerk issues, verifies, and revokes the key. What it doesn't do is cap how much a customer's key can spend against your paid API, so one customer's runaway script can burn through usage that affects everyone else.
